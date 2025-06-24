@@ -1,0 +1,212 @@
+---
+title: "Final Project Report"
+author: "Sherry Chen"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+##1 Data | Description 
+The dataset used for this project is the Rotterdam Breast Cancer Data, which includes clinical and pathological information on 2,982 patients diagnosed with primary breast cancer. The data were collected by the Rotterdam Tumor Bank and are available through the survival package in R. They were originally used in a study by Royston and Altman in 2013 to evaluate prognostic models for survival analysis.
+
+The dataset contains variables such as age at diagnosis, menopausal status, tumor size and grade, number of positive lymph nodes, hormone receptor status, treatments received, and clinical outcomes like time to recurrence and time to death. The total sample size is 2982.
+
+For this project, I focused on two specific variables: the number of positive lymph nodes (nodes) and recurrence status (recur), a binary indicator showing whether or not the patient experienced recurrence. The analysis aims to compare the distribution of lymph node involvement between the two groups using non-parametric density estimation.
+
+I displayed the first 5 rows. The group sizes are No Recurrence: 1464, Recurrence: 1518.
+```{r, echo = FALSE}
+library(sm)
+library(dplyr)
+library(ggplot2)
+df <- read.csv("RotterdamBreastCancer_df.csv")
+df_clean <- df %>%
+  select(nodes, recur) %>%
+  filter(!is.na(nodes), !is.na(recur), nodes >= 0, recur %in% c(0, 1)) %>%
+  mutate(
+    recur = factor(recur, levels = c(0, 1), labels = c("No Recurrence", "Recurrence")),
+    nodes = as.numeric(nodes)
+  )
+
+# Preview the cleaned dataset
+head(df_clean)
+```
+
+
+
+
+
+
+
+## Analysis Goal 
+The goal of this analysis is to investigate whether the distribution of lymph node involvement differs between patients who experienced a recurrence and those who did not. We aim to use non-parametric density estimation to explore and compare the distributions, and a formal hypothesis test to assess whether the differences are statistically significant.
+
+## Kernal Density Estimation and Initial Comparison
+
+```{r, echo = FALSE}
+
+# Summary statistics
+summary_stats <- df_clean %>%
+  group_by(recur) %>%
+  summarise(
+    count = n(),
+    mean_nodes = round(mean(nodes), 2),
+    sd_nodes = round(sd(nodes), 2),
+    median_nodes = median(nodes),
+    max_nodes = max(nodes)
+  )
+summary_stats
+
+# Density plot
+ggplot(df_clean, aes(x = nodes, fill = recur, color = recur)) +
+  geom_density(alpha = 0.4, adjust = 1.2) +
+  labs(
+    title = "Distribution of Positive Lymph Nodes by Recurrence Status",
+    x = "Number of Positive Lymph Nodes",
+    y = "Density"
+  ) +
+  theme_minimal()
+
+```
+We observe that both groups are right-skewed, but the recurrence group has a heavier tail, indicating more cases with high lymph node involvement. Summary statistics confirm this: the mean node count for the recurrence group is ~3.96, compared to ~1.41 for the no-recurrence group.
+
+Using bw.nrd0() in R we found Silverman’s rule‐of‐thumb bandwidt(Chapter 3 in Course Notes)h, then multiplied by 1.2 (i.e. adjust=1.2) to slightly smooth out minor wiggles in the heavy right tail. This choice balances bias and variance, highlighting the overall skew without over‐fitting to random noiseA higher bandwidth helps reduce noise and overfitting, especially in right-skewed distributions like these. This choice provides a better visual comparison of the general patterns across groups without exaggerating minor fluctuations.
+
+
+## Difference in Kernal Densities
+```{r, echo = FALSE}
+kde0 <- density(df_clean$nodes[df_clean$recur == "No Recurrence"], adjust = 1.2)
+kde1 <- density(df_clean$nodes[df_clean$recur == "Recurrence"], adjust = 1.2)
+
+kde_diff <- data.frame(
+  x = kde0$x,
+  diff = kde1$y - kde0$y
+)
+
+ggplot(kde_diff, aes(x = x, y = diff)) +
+  geom_line(color = "darkred", linewidth = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Difference in KDE: Recurrence - No Recurrence",
+    x = "Number of Nodes",
+    y = "Density Difference"
+  ) +
+  theme_minimal()
+```
+When we look at the difference in KDE between the recurrence and no-recurrence groups, the first thing that jumps out is the large dip at zero. This tells us that many more patients in the no-recurrence group had zero positive lymph nodes—which makes sense clinically. Having no cancer spread to the lymph nodes is typically a good sign, so it's no surprise that these patients were much less likely to experience a recurrence. That sharp negative spike shows just how concentrated the no-recurrence group is around that zero-node mark, while the recurrence group is more spread out.
+
+As we move away from zero, the curve rises above zero and starts to fluctuate. These positive values indicate that the recurrence group becomes more prominent in that range—meaning more patients who had a recurrence had between 1 and 7 positive nodes compared to those who didn’t. The curve does wiggle a bit here, which is mostly due to the smoothing method used in KDE—it’s trying to estimate a continuous shape from discrete data. Still, the general trend is clear: the recurrence group tends to have more patients with moderate node involvement, which shows a meaningful shift not just in location, but in the shape of the distribution.
+
+Beyond about 10 nodes, the difference curve flattens near zero. This suggests that very high lymph node counts are relatively rare in both groups and occur at similar rates. In statistical terms, this plot helps explain why our formal hypothesis test strongly rejected the idea that the two distributions are the same—it’s not just a simple average difference, but rather a consistent pattern: the no-recurrence group clusters around zero, and the recurrence group is more spread out with a heavier right tail. So, this KDE difference plot gives us a localized view of how these groups differ, reinforcing the idea that lymph node involvement is closely tied to recurrence outcomes.
+
+## Formal Hypothesis Test of Density Equality
+
+```{r, echo=FALSE}
+set.seed(3522023)
+nodes <- df_clean$nodes
+group <- df_clean$recur
+
+# Density comparison with bootstrapped p-value
+out <- sm.density.compare(
+  x = nodes,
+  group = group,
+  model = "equal",
+  nboot = 10000,
+  xlab = "Number of Positive Nodes"
+)
+
+# Add legend
+legend("topright", legend = levels(group), fill = 2:(1 + nlevels(group)))
+
+# View output (for p-value)
+print(out$p)
+```
+The test statistic is derived using a bootstrap approach with 10,000 samples. A p-value of 0 (or extremely small) indicates very strong evidence against the null hypothesis of equal distributions.
+
+While the formal test rejects the null hypothesis of equal distributions, we also consider whether the difference is primarily due to shape, or just due to a location/scale shift. The KDE difference plot shows not only a rightward shift but also a heavier tail for the recurrence group, suggesting a shape difference as well. Therefore, both the location and the overall shape of the distributions appear to differ meaningfully between groups.
+
+
+## Classification Based on Lymph Node Count
+```{r, echo = FALSE}
+library(dplyr)
+library(ggplot2)
+
+# Ensure data is clean and grouped correctly
+df_classify <- df %>%
+  select(nodes, recur) %>%
+  filter(!is.na(nodes), !is.na(recur), nodes >= 0, recur %in% c(0, 1)) %>%
+  mutate(
+    recur = factor(recur, levels = c(0, 1), labels = c("No Recurrence", "Recurrence")),
+    nodes = as.numeric(nodes)
+  )
+
+# Check group sizes
+table(df_classify$recur)
+
+# Make sure both groups have at least 2 observations
+if (any(table(df_classify$recur) < 2)) {
+  stop("One of the groups has fewer than 2 observations.")
+}
+
+# Use higher smoothing to reduce spikiness
+kde_no <- density(df_classify$nodes[df_classify$recur == "No Recurrence"], adjust = 3)
+kde_yes <- density(df_classify$nodes[df_classify$recur == "Recurrence"], adjust = 3)
+
+
+# Estimate group proportions (priors)
+p_no <- mean(df_classify$recur == "No Recurrence")
+p_yes <- mean(df_classify$recur == "Recurrence")
+
+# Interpolate to shared x grid
+common_x <- kde_no$x
+f_no <- kde_no$y
+f_yes <- approx(kde_yes$x, kde_yes$y, xout = common_x, rule = 2)$y  # Extrapolate if needed
+
+# Estimate P(Recurrence | nodes = x) using Bayes' Rule
+p_rec_given_x <- (p_yes * f_yes) / (p_yes * f_yes + p_no * f_no)
+
+# Assemble plot data
+prob_df <- data.frame(
+  nodes = common_x,
+  prob_recur = p_rec_given_x
+)
+
+# Plot conditional probability
+ggplot(prob_df, aes(x = nodes, y = prob_recur)) +
+  geom_line(color = "darkblue", linewidth = 1) +
+  labs(
+    title = "Estimated Probability of Recurrence Given Lymph Node Count",
+    x = "Number of Positive Lymph Nodes",
+    y = "P(Recurrence | nodes = x)"
+  ) +
+  theme_minimal()
+
+```
+```{r, echo=FALSE}
+# Logistic regression alternative (much smoother)
+glm_model <- glm(recur ~ nodes, data = df_classify, family = binomial)
+new_nodes <- data.frame(nodes = seq(min(df_classify$nodes), max(df_classify$nodes), length.out = 200))
+new_nodes$prob <- predict(glm_model, newdata = new_nodes, type = "response")
+
+ggplot(new_nodes, aes(x = nodes, y = prob)) +
+  geom_line(color = "darkgreen", linewidth = 1.2) +
+  labs(
+    title = "Smoothed Estimated Probability of Recurrence (Logistic Model)",
+    x = "Number of Positive Lymph Nodes",
+    y = "P(Recurrence | nodes = x)"
+  ) +
+  theme_minimal()
+
+```
+
+Using kernel density estimates and Bayes’ Theorem, we computed the estimated probability that a patient experiences recurrence given a specific lymph node count. This probability increases markedly with the number of positive nodes, consistent with clinical intuition. For example, patients with 0–2 nodes have a very low probability of recurrence, while those with 10+ nodes face substantially higher risk.
+
+
+## Conclusion and Summary
+This analysis provides strong evidence that lymph node involvement is meaningfully associated with breast cancer recurrence. Using kernel density estimation, we found clear differences in the distribution of positive lymph nodes between patients who experienced a recurrence and those who did not. The no-recurrence group had a sharp peak at zero nodes, while the recurrence group showed a more spread-out, right-skewed distribution with a heavier tail. This pattern suggests that recurrence is more likely among patients with a higher number of positive lymph nodes, which aligns with clinical understanding.
+
+To support this observation statistically, we conducted a formal hypothesis test using 10,000 bootstrap samples. The resulting p-value was essentially zero, providing strong evidence to reject the null hypothesis that the two groups share the same underlying distribution. The difference wasn’t just in the average node count—it reflected a broader shift in both the shape and spread of the distributions. The recurrence group didn’t just have higher counts on average; it had a different overall density pattern, with a heavier presence at moderate and high node levels.
+
+Finally, we used Bayes’ Theorem to estimate the probability of recurrence given a specific lymph node count. This probability increased steadily with node count, showing a clear upward trend—from near zero at low counts to very high probabilities beyond 10 nodes. A logistic regression model confirmed this pattern. These results suggest that lymph node count could play a valuable role in predicting recurrence risk and may be useful in clinical decision-making or future prognostic models. Overall, the analysis highlights a strong and interpretable relationship between lymph node involvement and recurrence outcomes.
+
+
